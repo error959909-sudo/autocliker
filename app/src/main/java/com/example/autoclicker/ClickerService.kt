@@ -404,3 +404,88 @@ class ClickerService : AccessibilityService() {
             waitSeconds(ceil(v + ADD_SECONDS).toLong())
         }
     }
+
+        private fun retry(attempt: Int) {
+        if (!running) return
+        if (attempt >= 2) {
+            stopLoop("Number nahi mila")
+        } else {
+            status("Retry...")
+            handler.postDelayed({ readBox(attempt + 1) }, 1500)
+        }
+    }
+
+    // 2) wait
+    private fun waitSeconds(remaining: Long) {
+        if (!running) return
+        if (remaining <= 0) { runClicks(0); return }
+        status("Wait ${remaining}s")
+        handler.postDelayed({ waitSeconds(remaining - 1) }, 1000)
+    }
+
+    // 3) clicks
+    private fun runClicks(i: Int) {
+        if (!running) return
+        if (i >= markers.size) {
+            afterClicks()
+            return
+        }
+        val loc = IntArray(2)
+        markers[i].getLocationOnScreen(loc)
+        val cx = loc[0] + markers[i].width / 2f
+        val cy = loc[1] + markers[i].height / 2f
+        status("Click ${i + 1}/${markers.size}")
+        val path = Path().apply { moveTo(cx, cy) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 60))
+            .build()
+        dispatchGesture(gesture, null, null)
+        handler.postDelayed({ runClicks(i + 1) }, GAP_MS)
+    }
+
+    // 4) clicks ke baad LOAD box se loading khatam hone ka wait
+    private fun afterClicks() {
+        status("Loading ka wait...")
+        loadPrev = null
+        loadSeen = false
+        stableCount = 0
+        loadStartedAt = SystemClock.elapsedRealtime()
+        handler.postDelayed({ pollLoading() }, GAP_MS)
+    }
+
+    private fun pollLoading() {
+        if (!running) return
+        grabScreen(false) { bmp ->
+            if (!running) return@grabScreen
+            val crop = if (bmp != null) cropBox(bmp, loadBox) else null
+            val elapsed = (SystemClock.elapsedRealtime() - loadStartedAt) / 1000
+
+            if (crop != null) {
+                val sig = signature(crop)
+                val prev = loadPrev
+                loadPrev = sig
+                if (prev != null) {
+                    if (diff(prev, sig) > CHANGE_THRESHOLD) {
+                        loadSeen = true
+                        stableCount = 0
+                    } else if (loadSeen) {
+                        stableCount++
+                    }
+                }
+            }
+
+            if (loadSeen && stableCount >= 2) {
+                status("Load ho gaya")
+                handler.postDelayed({ readBox(0) }, 1000)
+            } else if (!loadSeen && elapsed >= LOAD_START_TIMEOUT_S) {
+                status("Loading nahi dikhi, aage")
+                readBox(0)
+            } else if (elapsed >= LOAD_MAX_S) {
+                stopLoop("Loading atak gayi")
+            } else {
+                status(if (loadSeen) "Loading chal rahi..." else "Loading ka wait...")
+                handler.postDelayed({ pollLoading() }, POLL_MS)
+            }
+        }
+    }
+}
